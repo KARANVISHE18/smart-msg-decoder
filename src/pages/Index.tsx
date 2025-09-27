@@ -1,15 +1,28 @@
 import { useState } from "react";
+import { Capacitor } from "@capacitor/core";
 import Header from "@/components/Header";
 import MessageCard from "@/components/MessageCard";
 import StatsCard from "@/components/StatsCard";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { toast } from "@/components/ui/use-toast";
 import { Shield, MessageSquare, TrendingUp, AlertCircle, Smartphone, Play } from "lucide-react";
 import heroPhone from "@/assets/hero-phone.png";
 
+declare global {
+  interface Window {
+    SMS: {
+      startWatch: (success: () => void, error: (error: any) => void) => void;
+      stopWatch: (success: () => void, error: (error: any) => void) => void;
+    };
+  }
+}
+
 const Index = () => {
   const [isScanning, setIsScanning] = useState(false);
+  const [isMonitoring, setIsMonitoring] = useState(false);
+  const [liveMessages, setLiveMessages] = useState<any[]>([]);
 
   // Sample data
   const sampleMessages = [
@@ -39,12 +52,140 @@ const Index = () => {
     }
   ];
 
-  const handleStartScan = () => {
+  const handleStartScan = async () => {
+    if (!Capacitor.isNativePlatform()) {
+      toast({
+        title: "Native Platform Required",
+        description: "SMS monitoring requires a native Android/iOS app. Try building the app with Capacitor.",
+        variant: "destructive"
+      });
+      return;
+    }
+
     setIsScanning(true);
-    // Simulate scanning process
-    setTimeout(() => {
-      setIsScanning(false);
-    }, 3000);
+    
+    try {
+      // Request SMS permissions
+      await requestSMSPermissions();
+      
+      // Start SMS monitoring
+      startSMSMonitoring();
+      
+      toast({
+        title: "SMS Monitoring Started",
+        description: "Now monitoring incoming messages for threats.",
+      });
+      
+      setIsMonitoring(true);
+      
+    } catch (error) {
+      console.error('SMS permission error:', error);
+      toast({
+        title: "Permission Denied",
+        description: "SMS permissions are required for message monitoring.",
+        variant: "destructive"
+      });
+    }
+    
+    setIsScanning(false);
+  };
+
+  const requestSMSPermissions = async () => {
+    return new Promise((resolve, reject) => {
+      if (window.SMS) {
+        // SMS plugin is available
+        resolve(true);
+      } else {
+        // Fallback for web testing
+        if (confirm("Allow SMS Guardian to access your SMS messages?")) {
+          resolve(true);
+        } else {
+          reject(new Error("Permission denied"));
+        }
+      }
+    });
+  };
+
+  const startSMSMonitoring = () => {
+    if (window.SMS) {
+      window.SMS.startWatch(
+        () => {
+          console.log('SMS monitoring started successfully');
+        },
+        (error) => {
+          console.error('SMS monitoring error:', error);
+          toast({
+            title: "Monitoring Error",
+            description: "Failed to start SMS monitoring.",
+            variant: "destructive"
+          });
+        }
+      );
+
+      // Listen for incoming SMS
+      document.addEventListener('onSMSArrive', (e: any) => {
+        const sms = e.data;
+        handleIncomingSMS(sms);
+      });
+    } else {
+      // Simulate incoming messages for web testing
+      setTimeout(() => {
+        simulateIncomingMessage();
+      }, 2000);
+    }
+  };
+
+  const handleIncomingSMS = (sms: any) => {
+    // Analyze the message (mock AI analysis)
+    const analysis = analyzeSMSMessage(sms.body);
+    
+    const newMessage = {
+      id: Date.now(),
+      message: sms.body,
+      sender: sms.address,
+      timestamp: "Just now",
+      classification: analysis.classification,
+      confidence: analysis.confidence
+    };
+
+    setLiveMessages(prev => [newMessage, ...prev.slice(0, 4)]);
+    
+    if (analysis.classification !== 'safe') {
+      toast({
+        title: `${analysis.classification.toUpperCase()} Message Detected`,
+        description: `From: ${sms.address}`,
+        variant: analysis.classification === 'spam' ? 'destructive' : 'default'
+      });
+    }
+  };
+
+  const analyzeSMSMessage = (message: string) => {
+    // Simple mock analysis - replace with actual AI model
+    const spamKeywords = ['winner', 'prize', 'click here', 'urgent', 'congratulations', '$', 'free'];
+    const suspiciousKeywords = ['bank', 'account', 'verify', 'suspended', 'security'];
+    
+    const lowerMessage = message.toLowerCase();
+    const spamScore = spamKeywords.filter(keyword => lowerMessage.includes(keyword)).length;
+    const suspiciousScore = suspiciousKeywords.filter(keyword => lowerMessage.includes(keyword)).length;
+    
+    if (spamScore >= 2) {
+      return { classification: 'spam' as const, confidence: Math.min(0.85 + spamScore * 0.05, 0.99) };
+    } else if (suspiciousScore >= 1) {
+      return { classification: 'suspicious' as const, confidence: Math.min(0.70 + suspiciousScore * 0.1, 0.95) };
+    } else {
+      return { classification: 'safe' as const, confidence: Math.random() * 0.2 + 0.8 };
+    }
+  };
+
+  const simulateIncomingMessage = () => {
+    const testMessages = [
+      { body: "You've won a $500 gift card! Click here now!", address: "+1555123456" },
+      { body: "Hey, are you free for dinner tonight?", address: "Mom" },
+      { body: "URGENT: Your bank account will be suspended. Call now!", address: "SecurityBank" }
+    ];
+    
+    const randomMessage = testMessages[Math.floor(Math.random() * testMessages.length)];
+    handleIncomingSMS(randomMessage);
   };
 
   return (
@@ -128,15 +269,32 @@ const Index = () => {
             <h3 className="text-lg font-semibold text-foreground">Recent Analysis</h3>
             <Badge variant="outline" className="bg-background">
               <Smartphone className="h-3 w-3 mr-1" />
-              Live Monitoring
+              {isMonitoring ? 'Live Monitoring Active' : 'Monitoring Inactive'}
             </Badge>
           </div>
           
           <div className="space-y-3">
+            {/* Show live messages first if monitoring is active */}
+            {liveMessages.length > 0 && (
+              <>
+                {liveMessages.map((message, index) => (
+                  <div 
+                    key={`live-${message.id}`} 
+                    className="animate-slide-in border-l-4 border-primary pl-2"
+                    style={{ animationDelay: `${index * 150}ms` }}
+                  >
+                    <MessageCard {...message} />
+                  </div>
+                ))}
+                {sampleMessages.length > 0 && <div className="border-t pt-3 mt-3" />}
+              </>
+            )}
+            
+            {/* Sample messages */}
             {sampleMessages.map((message, index) => (
               <div 
                 key={message.id} 
-                style={{ animationDelay: `${index * 150}ms` }}
+                style={{ animationDelay: `${(liveMessages.length + index) * 150}ms` }}
               >
                 <MessageCard {...message} />
               </div>
